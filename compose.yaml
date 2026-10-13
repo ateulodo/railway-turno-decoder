@@ -1,0 +1,17 @@
+services:
+  decoder:
+    build: .
+    ports:
+      - "127.0.0.1:8090:8000"
+    environment:
+      DATA_DIR: /app/data
+      MAX_UPLOAD_SIZE: "${MAX_UPLOAD_SIZE:-20971520}"
+      MAX_PDF_PAGES: "${MAX_PDF_PAGES:-1000}"
+      MAX_PDF_ANALYSIS_SECONDS: "${MAX_PDF_ANALYSIS_SECONDS:-60}"
+    volumes:
+      - ./data:/app/data
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL

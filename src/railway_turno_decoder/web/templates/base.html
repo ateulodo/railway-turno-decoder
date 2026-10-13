@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="it">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light">
+  <title>Railway Turno Decoder</title>
+  <link rel="stylesheet" href="{{ url_for('static', path='/app.css') }}">
+  <script src="{{ url_for('static', path='/htmx.min.js') }}" defer></script>
+  <script src="{{ url_for('static', path='/app.js') }}" defer></script>
+</head>
+<body>
+  <header class="site-header">
+    <a class="brand" href="/" aria-label="Railway Turno Decoder, home">
+      <span class="brand-mark" aria-hidden="true">RT</span>
+      <span>Railway Turno Decoder</span>
+    </a>
+    <span class="milestone">Milestone 1 · Ispezione PDF</span>
+  </header>
+  <main id="page-content" tabindex="-1">
+    {% block content %}{% endblock %}
+  </main>
+  <footer>Railway Turno Decoder · Applicazione standalone · Schema 0.1</footer>
+</body>
+</html>

@@ -1,0 +1,45 @@
+{% extends "base.html" %}
+{% block content %}
+<a class="back-link" href="/">← Carica un altro PDF</a>
+<section class="intro result-intro">
+  <p class="eyebrow">Ispezione del documento</p>
+  <h1 class="filename-title">{{ job.original_filename }}</h1>
+  {% set labels = {'created': 'Creato', 'processing': 'In elaborazione', 'completed': 'Completato', 'failed': 'Non riuscito'} %}
+  <p><span class="status status-{{ job.status.value }}">{{ labels[job.status.value] }} · {{ job.status.value }}</span></p>
+  <p class="muted job-id">Job ID <code>{{ job.job_id }}</code></p>
+</section>
+{% for error in job.errors %}
+<div class="alert alert-error" role="alert"><strong>Analisi non riuscita</strong><p>{{ error }}</p></div>
+{% endfor %}
+{% for warning in job.warnings %}
+<div class="alert alert-warning" role="status"><strong>Avvertenza</strong><p>{{ warning }}</p></div>
+{% endfor %}
+{% if job.document %}
+<section class="summary-grid" aria-label="Riepilogo documento">
+  <div class="card metric"><span>Pagine</span><strong>{{ job.document.page_count }}</strong></div>
+  <div class="card metric"><span>Testo estraibile</span><strong>{{ 'Presente' if job.document.has_extractable_text else 'Assente' }}</strong></div>
+  <div class="card metric"><span>Dimensione file</span><strong>{{ '%.1f' | format(job.source_size_bytes / 1024) }} KiB</strong></div>
+</section>
+<section class="card" aria-labelledby="metadata-title">
+  <h2 id="metadata-title">Metadata PDF</h2>
+  <dl class="metadata">
+    {% for key, value in job.document.metadata.items() %}
+    <dt>{{ key }}</dt><dd>{{ value if value else '—' }}</dd>
+    {% else %}<dt>Metadata</dt><dd>Nessun metadata disponibile.</dd>{% endfor %}
+  </dl>
+</section>
+<section class="card" aria-labelledby="pages-title">
+  <h2 id="pages-title">Struttura delle pagine</h2>
+  <p class="muted">Dimensioni visibili dopo la rotazione, in punti PDF (72 punti = 1 pollice).</p>
+  <div class="table-scroll" tabindex="0" role="region" aria-label="Dimensioni e rotazioni delle pagine">
+    <table>
+      <thead><tr><th scope="col">Pagina</th><th scope="col">Larghezza (pt)</th><th scope="col">Altezza (pt)</th><th scope="col">Rotazione</th><th scope="col">Testo</th></tr></thead>
+      <tbody>{% for page in job.document.pages %}
+      <tr><th scope="row">{{ page.page_number }}</th><td>{{ '%.2f' | format(page.width_points) }}</td><td>{{ '%.2f' | format(page.height_points) }}</td><td>{{ page.rotation_degrees }}°</td><td>{{ 'Presente' if page.has_extractable_text else 'Assente' }}</td></tr>
+      {% endfor %}</tbody>
+    </table>
+  </div>
+</section>
+{% endif %}
+<aside class="scope-note"><strong>Analisi preliminare</strong><p>Il decoder SGI non è ancora implementato. Non sono stati interpretati turni, treni, orari o giornate.</p></aside>
+{% endblock %}

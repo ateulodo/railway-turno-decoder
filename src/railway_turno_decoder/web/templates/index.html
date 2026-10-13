@@ -1,0 +1,38 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="intro">
+  <p class="eyebrow">Dal documento ai dati</p>
+  <h1>Il primo passo per leggere i tuoi turni.</h1>
+  <p class="lead">Carica un PDF per verificarne struttura, pagine e testo disponibile.</p>
+</section>
+{% if error %}
+<div class="alert alert-error" role="alert"><strong>Operazione non riuscita</strong><p>{{ error }}</p></div>
+{% endif %}
+<section class="card upload-card" aria-labelledby="upload-title">
+  <div class="section-heading"><span class="step">01</span><h2 id="upload-title">Carica un documento</h2></div>
+  <form id="upload-form" action="/jobs" method="post" enctype="multipart/form-data"
+        hx-post="/jobs" hx-encoding="multipart/form-data" hx-target="#page-content"
+        hx-select="#page-content" hx-swap="outerHTML" hx-indicator="#upload-status"
+        hx-disabled-elt="find button[type='submit']">
+    <label id="drop-zone" class="drop-zone" for="pdf-file">
+      <span class="document-icon" aria-hidden="true">↥</span>
+      <strong>Trascina qui il tuo PDF</strong>
+      <span>oppure seleziona un file dal computer</span>
+      <input id="pdf-file" type="file" name="file" accept=".pdf,application/pdf" required
+             data-max-size="{{ settings.max_upload_size }}" aria-describedby="upload-help file-name">
+    </label>
+    <p id="file-name" class="file-name" aria-live="polite">Nessun file selezionato</p>
+    <p id="upload-help" class="muted">Un PDF alla volta · massimo {{ '%.2f' | format(settings.max_upload_size / 1048576) }} MiB</p>
+    <div class="form-actions">
+      <button type="submit">Avvia analisi <span aria-hidden="true">→</span></button>
+      <span id="upload-status" class="htmx-indicator" role="status" aria-live="polite">Caricamento e analisi in corso…</span>
+    </div>
+    <p id="network-error" class="error-text" role="alert" hidden></p>
+  </form>
+</section>
+<aside class="scope-note">
+  <strong>Cosa viene analizzato</strong>
+  <p>Numero di pagine, metadata, presenza di testo estraibile, dimensioni e rotazioni.
+     Il decoder SGI non è ancora implementato: questa versione non riconosce turni o giornate.</p>
+</aside>
+{% endblock %}
