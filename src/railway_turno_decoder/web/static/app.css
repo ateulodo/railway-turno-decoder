@@ -60,3 +60,14 @@ thead th { color: var(--muted); font-size: 12px; font-weight: 600; }
 footer { max-width: 1160px; margin: auto; padding: 22px 32px; border-top: 1px solid var(--line); color: var(--muted); font-size: 12px; }
 @media (max-width: 600px) { .site-header { padding: 18px 20px; flex-wrap: wrap; gap: 8px; } main { padding: 32px 20px 48px; } .card { padding: 20px; } .summary-grid { grid-template-columns: 1fr; gap: 0; } .metric { gap: 2px; margin-bottom: 12px; } .metadata { grid-template-columns: 1fr 2fr; } }
 @media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
+
+.inspector-controls { display: flex; flex-wrap: wrap; gap: 1rem; margin: 1rem 0; }
+.inspector-controls select { max-width: 18rem; }
+.page-inspector { position: relative; width: 100%; background: white; }
+.page-inspector img, .page-inspector svg { position: absolute; inset: 0; width: 100%; height: 100%; }
+.page-inspector svg [hidden] { display: none; }
+.row-box { fill: #16a34a15; stroke: #16a34a; stroke-width: .7; }
+.drawing-box { fill: none; stroke: #9333ea; stroke-width: .5; pointer-events: none; }
+.word-box { fill: #0284c71a; stroke: #0284c7; stroke-width: .4; cursor: pointer; }
+.word-box.selected { fill: #f59e0b77; stroke: #d97706; stroke-width: 1; }
+#token-details, details pre { overflow: auto; max-height: 20rem; font-size: .8rem; }

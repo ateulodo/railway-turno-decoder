@@ -6,13 +6,14 @@ Il progetto è completamente indipendente da inAgenda: non ne usa codice,
 database, backend o modelli. Un eventuale collegamento futuro avverrà tramite
 un formato esportato.
 
-## Stato: Milestone 1
+## Stato: Milestone 2
 
-È disponibile il bootstrap web: caricamento sicuro di un PDF, job persistente,
-lettura delle informazioni iniziali e pagina di verifica. **Il decoder SGI non
-è ancora implementato.** Non sono interpretati treni, orari, minuti, accessori,
-servizio vettura, periodicità, linee o giornate. Non vengono eseguiti OCR o AI;
-non sono presenti database, code di elaborazione o esportazioni Excel.
+Sono disponibili upload sicuro, job persistenti, estrazione geometrica raw,
+classificazione strutturale, regioni di riga e inspector visuale.
+**Il decoder SGI non è ancora implementato.** I token rimangono testo PDF:
+nessuna interpretazione di treni, orari, minuti, accessori, parentesi,
+periodicità operativa o significato degli stili. Nessun OCR, AI, database,
+coda, multiprocessing, export Excel o API per inAgenda.
 
 ## Requisiti e installazione locale
 
@@ -61,7 +62,9 @@ Ferma il server con `Ctrl+C`.
 | `GET /` | Modulo di upload con drag & drop e selezione manuale |
 | `GET /health` | `{"status":"ok"}`; verifica che il processo risponda |
 | `POST /jobs` | Un solo campo multipart `file`; crea e analizza il job |
-| `GET /jobs/{job_id}` | Mostra il job persistito, anche dopo un riavvio |
+| `GET /jobs/{job_id}` | Riepilogo documento, tipi di pagina, righe e collegamenti inspector |
+| `GET /jobs/{job_id}/pages/{page_index}` | Inspector della pagina, indice da zero |
+| `GET /jobs/{job_id}/pages/{page_index}/image.png?scale=1.25` | Rendering PNG controllato e on-demand |
 
 L'upload ordinario termina con redirect `303` al risultato. HTMX usa
 `HX-Redirect` al medesimo URL e mostra uno stato di caricamento. I rifiuti
@@ -119,13 +122,16 @@ railway-turno-decoder/
 │   ├── main.py
 │   ├── config.py
 │   ├── models.py
+│   ├── raw_models.py
 │   ├── errors.py
 │   ├── jobs.py
 │   ├── pdf/
 │   │   ├── __init__.py
 │   │   ├── reader.py
-│   │   └── geometry.py
-│   ├── parser/__init__.py
+│   │   ├── geometry.py
+│   │   ├── extractor.py
+│   │   └── render.py
+│   ├── parser/{__init__,page_classifier,row_detector}.py
 │   ├── rules/__init__.py
 │   ├── validation/__init__.py
 │   ├── export/__init__.py
@@ -134,12 +140,13 @@ railway-turno-decoder/
 │       ├── routes.py
 │       ├── middleware.py
 │       ├── views.py
-│       ├── templates/{base,index,job}.html
-│       └── static/{app.css,app.js,htmx.min.js,htmx.LICENSE}
+│       ├── templates/{base,index,job,inspector}.html
+│       └── static/{app.css,app.js,inspector.js,htmx.min.js,htmx.LICENSE}
+├── scripts/inspect_local.py
 └── tests/
     ├── conftest.py
-    ├── unit/{test_config,test_reader,test_jobs,test_dependencies}.py
-    └── integration/{test_web,test_stream_limit}.py
+    ├── unit/{test_config,test_reader,test_jobs,test_dependencies,test_geometry}.py
+    └── integration/{test_web,test_stream_limit,test_raw_inspector}.py
 ```
 
 - `main.py`: factory FastAPI, dipendenze applicative e gestione degli errori.
@@ -147,7 +154,12 @@ railway-turno-decoder/
 - `pdf/reader.py`: accesso a PyMuPDF e informazioni del documento; nessuna regola SGI.
 - `models.py`: envelope del job e riepilogo PDF; non è il futuro modello normalizzato dei turni.
 - `web/`: ricezione HTTP, template Jinja2, HTMX e asset locali.
-- `geometry.py`, `parser/`, `rules/`, `validation/`, `export/`: punti di estensione documentati, senza implementazioni anticipate.
+- `raw_models.py`: schema raw indipendente dallo schema job.
+- `pdf/geometry.py`: conversione di Point/Rect/Quad e primitive in JSON nostro.
+- `pdf/extractor.py`: unica apertura e singolo passaggio pagine; testo e vettori.
+- `pdf/render.py`: PNG on-demand con limiti di scala e pixel.
+- `parser/`: classificazione e segmentazione geometrica pura; non importa PyMuPDF.
+- `rules/`, `validation/`, `export/`: estensioni future, senza decoder anticipato.
 
 L'analisi avviene nella stessa richiesta, usando il thread pool di Starlette per
 non bloccare l'event loop durante I/O e lettura. Tutte le operazioni PyMuPDF
@@ -172,9 +184,7 @@ PDF → estrazione geometrica RAW → segmentazione turni/giornate
 I livelli resteranno distinti:
 
 1. **RAW EXTRACTION**: testo, coordinate, bbox, rotazioni, primitive, stili e
-   provenienza geometrica. La Milestone 2 introdurrà `raw.json` con words,
-   drawings, spessori, dash pattern e coordinate originali/normalizzate rispetto
-   alla rotazione. Nessuna di queste estrazioni è implementata ora.
+   provenienza geometrica. Implementata nella Milestone 2, produce `raw.json`.
 2. **DECODED DATA**: interpretazione SGI del raw, con riferimenti alla provenienza.
 3. **NORMALIZED DATA**: dati indipendenti dal documento, consumabili dagli exporter.
 
@@ -191,15 +201,17 @@ server**. Il nome originale è solo metadata e non costruisce mai percorsi.
 ```text
 data/jobs/<uuid>/
 ├── source.pdf
-└── job.json
+├── job.json
+├── raw.json
+└── raw_pages/<extraction_uuid>/<page_index>.json
 ```
 
 `job.json` usa `schema_version: "0.1"`, UUID, nome originale, timestamp UTC,
-dimensione della sorgente, stato, documento, warning ed errori. Il documento
+dimensione della sorgente, stato, documento, warning, errori e `raw_summary` opzionale. Il documento
 contiene numero pagine, metadata disponibili e, per ogni pagina, dimensioni
 in punti, rotazione e presenza di testo. Le pagine sono numerate da 1; le
 dimensioni sono quelle visibili **dopo** la rotazione. Il contenuto testuale
-non viene conservato in questa milestone.
+viene conservato, con geometria e provenance, nel raw separato.
 
 La sequenza è `created → processing → completed`, oppure `failed` in caso di
 errore. Un job completato richiede un documento e nessun errore; un job fallito
@@ -210,7 +222,8 @@ Se fallisce la prima persistenza, viene tentata la rimozione della sola
 directory UUID appena creata tramite `rmdir`: directory non vuote, symlink
 e directory già esistenti non vengono cancellati. Un errore di cleanup viene
 registrato senza mascherare l'errore originale. Non viene usata cancellazione
-ricorsiva. Se la persistenza di `failed` fallisce, viene restituito `503` e il
+ricorsiva per i job. La sola generazione raw appena creata viene rimossa
+ricorsivamente in caso di errore di scrittura. Se la persistenza di `failed` fallisce, viene restituito `503` e il
 precedente JSON valido può conservare lo stato `created` o `processing`.
 
 La sicurezza dell'upload comprende:
@@ -227,8 +240,9 @@ La sicurezza dell'upload comprende:
   da PyMuPDF sono accettati con un warning; documenti senza testo segnalano un warning.
 - Limite pagine verificato subito dopo l'apertura, prima di caricare pagine:
   un superamento produce errore controllato `422` e job `failed`.
-- Budget cooperativo verificato dopo l'apertura, prima/dopo ogni pagina e
-  dopo la costruzione del riepilogo: un superamento produce `422` e `failed`.
+- Budget cooperativo verificato dopo l'apertura, durante hashing, prima/dopo
+  testo e drawings, tra conversioni e pagine, dopo il parser e durante la
+  persistenza raw: un superamento produce `422` e `failed`.
 - Nessuna esecuzione del PDF, apertura di allegati o passaggio dei contenuti alla shell.
 
 I rifiuti preliminari (estensione, dimensione, multipart) non creano job.
@@ -254,6 +268,179 @@ arresti restano rimandati a una futura fase di hardening, prima di ampliare il
 modello di elaborazione o accettare upload non fidati. Non sono stati introdotti
 multiprocessing, worker esterni, sandbox o code in questa milestone.
 
+## Raw schema 1.0
+
+**`raw.json` è una rappresentazione tecnica del PDF orientata alla provenance;
+non è il formato finale esportabile dei turni.** Lo schema del job resta 0.1:
+i job della Milestone 1 continuano a essere leggibili senza `raw_summary`.
+La loro pagina invita a caricare nuovamente il documento per ottenere il raw.
+
+| Livello | Campi principali |
+| --- | --- |
+| Documento | `raw_schema_version`, UUID di estrazione, SHA-256 dei byte, dimensione, `page_count`, metadata, `uniform_rotation` oppure null, unità `points`, `pages` |
+| Pagina | `page_number` da 1, `page_index` da 0, dimensioni display, rotazione, MediaBox/CropBox, bounds e matrici, tipo e motivazioni, words, drawings, rows, warnings |
+| Word | `word_index` stabile nella pagina, testo originale, bbox original/display, numeri block/line/word PyMuPDF |
+| Drawing | indice, tipo, bbox, spessore, dash pattern originale, colori/opacità stroke/fill, cap/join, close/even-odd, seqno/layer, primitive e altri metadata JSON |
+| Primitive | indice nel drawing, tipo nativo (`l`, `c`, `re`, `qu` ecc.), punti e bbox original/display, argomenti geometrici tipizzati e argomenti scalari preservati |
+| Row | indice nella pagina, bbox original/display, marker raw, numero raw oppure null, anchor words, member words, drawing/item references e motivazioni |
+
+`get_text("words", sort=False)` conserva l'ordine raw: non ordiniamo o fondiamo
+parole vicine e non normalizziamo il testo memorizzato. Tutti gli indici sono
+locali alla pagina; quelli delle primitive sono locali al drawing. Le coppie
+`drawing_index`/`item_index` identificano le primitive esatte. I bbox delle
+curve delimitano i punti di controllo; non sono una stima della sola curva.
+I segmenti possono avere bbox con larghezza o altezza zero. `extra` conserva
+metadata nativi ulteriori convertiti in valori JSON, senza oggetti PyMuPDF.
+Nessun path di esecuzione, username o informazione della macchina viene
+aggiunto al raw; i metadata provengono dal documento e possono essere riservati.
+
+### Coordinate e rotazione
+
+Tutte le misure sono in punti (72 punti = 1 pollice). `original_bbox` indica
+lo spazio **PyMuPDF non ruotato**, con origine in alto a sinistra e relativo al
+CropBox. Non coincide con le coordinate PDF native a origine in basso a sinistra.
+`display_bbox` indica la pagina visibile dopo rotazione, origine in alto a
+sinistra, x verso destra e y verso il basso.
+
+Si usano `page.rotation_matrix` e `page.derotation_matrix`, senza formule
+speciali per il documento. `pdf_to_original_matrix` collega lo spazio PDF
+nativo (user space, origine convenzionale in basso a sinistra) allo spazio
+PyMuPDF non ruotato relativo al CropBox, lo stesso di `original_bbox`.
+La proprietà `page.transformation_matrix` di PyMuPDF 1.28.2 perde la traslazione
+del CropBox sulle pagine ruotate: per questo si legge la matrice ufficiale con
+rotazione temporaneamente zero, ripristinando la rotazione in `finally`, entro
+il lock nativo e senza salvare il PDF. I bbox corretti non vengono adattati
+alla proprietà difettosa. L'inversa calcolata consente original → PDF;
+la composizione con `rotation_matrix` consente PDF → original → display.
+Non sono aggiunti campi inversi o nuovi campi allo schema raw.
+I test partono da punti PDF nativi noti e verificano trasformazione, round-trip
+e composizione con CropBox traslato nelle quattro rotazioni.
+MediaBox/CropBox sono i valori nativi delle rispettive proprietà:
+non vengono equiparati implicitamente al rettangolo display. I quattro angoli
+dei rettangoli sono trasformati nelle primitive; il bbox trasformato racchiude
+la geometria. Test sintetici coprono 0/90/180/270 gradi, anche con CropBox traslato.
+Riferimenti: [coordinate delle pagine PyMuPDF](https://pymupdf.readthedocs.io/en/latest/page.html),
+[primitive vettoriali](https://pymupdf.readthedocs.io/en/latest/recipes-drawing-and-graphics.html).
+
+### Classificazione deterministica e conservativa
+
+Ordine delle regole, senza numeri pagina fissi:
+
+1. `TRAIN_PERIODICITY_NOTES`: heading geometricamente contiguo sulle note di
+   periodicità nella fascia superiore (18%), con matching di parole intere.
+   Una vista derivata raggruppa le parole per centro verticale (tolleranza
+   `max(0.5 pt, 30% della minore altezza)` rispetto a un anchor fisso) e le
+   ordina per x display; grandi spazi orizzontali separano i gruppi. Sono
+   ammessi gap da -25% a 150% della minore altezza dei word adiacenti.
+   Accenti e punteggiatura sono normalizzati solo per il matching. Parole
+   sparse non bastano e l'ordine raw non viene modificato. Le motivazioni
+   referenziano gli indici raw originali anche quando l'emissione è permutata.
+2. `INDEX`: campi strutturali planning/profilo/turno/data/pubblicazione nella
+   fascia superiore (18% dell'altezza).
+3. `DUTY_DIAGRAM`: turno e profilo nella fascia superiore, almeno tre fra le
+   etichette Lav/Cct/Km/Not/Rip, marker nel margine sinistro e almeno due
+   segmenti orizzontali coerenti. Le etichette sono segnali di layout.
+4. `UNKNOWN`: segnali insufficienti. Nessuna classificazione forzata.
+
+Le motivazioni contengono codici e riferimenti raw. Queste euristiche descrivono
+layout compatibili; non certificano l'identità o il significato di una pagina.
+
+### Segmentazione delle righe
+
+Solo sulle pagine `DUTY_DIAGRAM`, regex `^[LMXGVSD]{1,7}$` più posizione nel
+margine sinistro (12% della larghezza), fascia verticale 4–95%, allineamento
+alla colonna più a sinistra e supporto di primitive orizzontali. Non occorre
+una singola linea lunga: segmenti collineari brevi costituiscono supporto.
+Un segmento deve essere lungo almeno 1,5% della pagina, con tolleranza verticale
+`max(0.5 pt, 0.2% altezza)` e raggiungere oltre il 15% della larghezza.
+
+Gli anchor sono ordinati verticalmente. Il bordo preferito di ogni banda è
+mezzo marker sopra il bordo superiore, ma viene limitato inferiormente dal
+bordo inferiore dell'anchor precedente (4% della pagina per il primo). Così
+altezze differenti non possono invertire i confini o tagliare l'anchor precedente.
+La banda finisce all'inizio della successiva. L'ultima usa il passo mediano dei
+bordi ordinati (25% dell'altezza con un solo marker) e viene estesa almeno fino
+a mezzo marker dopo l'ultimo anchor, entro il 95% della pagina.
+Prima di usare la ricerca binaria si verificano confini strettamente monotoni,
+bande positive e contenimento completo degli anchor. Anchor sovrapposti o non
+contenibili producono un warning esplicito di layout ambiguo e nessuna riga
+per quella pagina, senza attribuire il rifiuto a un falso difetto di supporto.
+Le bande valide sono consecutive e non sovrapposte, associate ai marker originali.
+I word appartengono alla banda che ne contiene il centro verticale (intervalli
+semiaperti); le primitive sono referenziate per intersezione del loro bbox.
+Una primitiva può quindi appartenere a più bande senza essere duplicata nel raw.
+
+Un numero è assegnato soltanto se esiste un unico token ASCII di 1–4 cifre sotto
+il marker nella stessa banda e nella colonna stretta di sinistra. Altrimenti
+rimane null. Marker sovrapposti o bande senza supporto generano warning; tutti
+i token originali restano disponibili. Varianti dello stesso numero rimangono
+righe distinte: non vengono aggregate per numero o marker. Il numero e il marker
+sono stringhe strutturali, senza identità ferroviaria dedotta.
+
+L'estrazione visita le pagine una volta e non effettua ricerche quadratiche
+sull'intero documento. Per pagina usa ordinamento dei marker e ricerca binaria
+per word e intervalli dei vettori: O(W log R + V log R + K), oltre all'ordinamento,
+dove K è il numero effettivo di riferimenti alle bande; la vista header richiede
+inoltre O(H log H) per H parole nella fascia superiore. Non è promesso un limite
+rigido di memoria: geometria molto complessa può produrre molti oggetti.
+
+### Persistenza raw e inspector
+
+Le pagine vengono serializzate una per volta. Le copie per pagina sono prima
+scritte in una nuova generazione UUID; `raw.json` viene pubblicato con replace
+atomico di un temporaneo esclusivo nella medesima directory. Un errore prima
+del replace conserva il raw precedente e tenta il cleanup della nuova
+generazione. `job.json` viene completato soltanto dopo la pubblicazione raw.
+Non è una transazione fra file e non garantisce durabilità a un power loss:
+se fallisce la successiva scrittura del job, può esistere un raw valido insieme
+a un job fallito. L'inspector richiede sempre un job completato.
+
+Le copie consentono lettura di una sola pagina senza caricare tutto il raw.
+La generazione referenziata nel riepilogo impedisce di mescolare pagine di
+estrazioni diverse. Le vecchie generazioni complete sono conservate; non viene
+implementata garbage collection. Il raw canonico più le copie richiedono circa
+il doppio dello spazio JSON, oltre al PDF. Tutti sono dati riservati locali.
+
+La pagina job mostra distribuzione dei tipi e righe; l'inspector mostra PNG,
+bande SVG, bbox dei token e dei drawing attivabili, selezione tramite click o
+menu e dettagli original/display del token. Il dettaglio delle righe include
+provenance e motivazioni. Non è un editor. I drawing sono visualizzati come bbox;
+le primitive fedeli restano nel raw, senza interpretazione degli stili. Per
+rendere visibili i bbox degeneri dei segmenti, il solo overlay usa un minimo
+di 0.5 pt; le coordinate raw rimangono inalterate.
+
+Il rendering avviene soltanto su richiesta, senza cache permanente o rendering
+preventivo. Scala finita **0.25–2**, default **1.25**, massimo **8.000.000 pixel**
+verificati prima di allocare il pixmap RGB; riusa il lock nativo e il budget
+cooperativo. Lo stesso limite nativo di timeout/memoria si applica al rendering.
+UUID canonico, indice valido rispetto al job e al PDF, rifiuto di symlink per
+sorgente, copie e directory di generazione. Nessun endpoint accetta path o
+serve direttamente `source.pdf`/`raw.json`. HTML autoescaped; JSON embedded con
+`tojson`; JavaScript usa `textContent` per i token. Nessun asset esterno.
+
+### Validazione locale opzionale
+
+I test ordinari usano solo PDF sintetici. Per un PDF locale autorizzato,
+ignorato da Git, è disponibile un probe separato:
+
+```sh
+python scripts/inspect_local.py --pdf samples/local.pdf --data-dir data/local-validation
+```
+
+Se il file è assente stampa `SKIPPED` e termina con successo. Se presente,
+esegue la pipeline normale, salva un job locale (anche la sorgente sotto
+`data/`) e stampa conteggi e durata. Non modifica l'originale. Per aprirlo
+nell'inspector avvia l'app con la stessa `DATA_DIR`. Non è parte dei test CI;
+non contiene codici, pagine o token specifici di documenti aziendali. I controlli
+canonici di documenti riservati restano in strumenti locali ignorati, senza
+copiare PDF nei test o riprodurli nella documentazione.
+
+Limitazioni: euristiche di layout da verificare su altri documenti; nessun OCR;
+nessuna gestione semantica di tabelle, treni o minuti; CropBox/rotazioni verificati
+su casi sintetici, non su ogni possibile PDF; nessun timeout nativo coercibile;
+nessuna ripresa automatica dei job interrotti. Un risultato senza warning non
+costituisce una certificazione semantica di correttezza.
+
 ## PDF reali e Git
 
 Inserisci eventuali PDF reali di sviluppo in `samples/`. Tutto il contenuto di
@@ -269,11 +456,18 @@ source .venv/bin/activate
 python -m pytest
 python -m ruff check .
 python -m ruff format --check .
+python -m compileall -q src tests scripts
 python -m pip check
+python -m pip wheel --no-deps --wheel-dir dist .
 git diff --check
 git diff --stat
 git status --short --branch
 ```
+
+La suite comprende inoltre trasformazioni con CropBox, raw round-trip, primitive
+line/curve/rect/quad, tutti i page type, varianti e ambiguità, provenance,
+scrittura raw fallita e precedente preservato, inspector, escaping, symlink,
+indici e limiti scala/pixel.
 
 I test generano piccoli PDF sintetici con PyMuPDF: non usano documenti aziendali.
 Verificano endpoint, upload, UUID, directory e JSON, metadata, rotazioni,

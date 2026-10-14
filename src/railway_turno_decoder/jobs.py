@@ -1,6 +1,8 @@
 """Filesystem job storage and the synchronous inspection lifecycle."""
 
 import logging
+import shutil
+from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import BinaryIO
@@ -11,7 +13,8 @@ from pydantic import ValidationError
 from railway_turno_decoder.config import Settings
 from railway_turno_decoder.errors import PDFInspectionError, StorageError, UserError
 from railway_turno_decoder.models import Job, JobStatus
-from railway_turno_decoder.pdf.reader import inspect_pdf
+from railway_turno_decoder.pdf.extractor import extract_pdf
+from railway_turno_decoder.raw_models import RawDocument, RawPage
 
 logger = logging.getLogger(__name__)
 COPY_CHUNK_SIZE = 64 * 1024
@@ -26,7 +29,7 @@ class JobStore:
         if not isinstance(job_id, UUID):
             raise TypeError("job_id must be a UUID")
         directory = self.root / str(job_id)
-        if directory.is_symlink():
+        if self.root.is_symlink() or directory.is_symlink():
             raise StorageError()
         return directory
 
@@ -85,6 +88,73 @@ class JobStore:
             logger.exception("Cannot load job %s", job_id)
             raise StorageError() from exc
 
+    def save_raw(
+        self, job_id: UUID, raw: RawDocument, check_budget: Callable[[], None] = lambda: None
+    ) -> None:
+        """Publish page sidecars first, then atomically replace the canonical JSON.
+
+        A failed generation never damages the previous canonical raw.json.
+        """
+        directory = self.directory(job_id)
+        parent = directory / "raw_pages"
+        generation = parent / str(raw.extraction_id)
+        temporary = directory / f"raw.{uuid4()}.tmp"
+        created = False
+        published = False
+        try:
+            if parent.is_symlink():
+                raise StorageError()
+            parent.mkdir(exist_ok=True)
+            generation.mkdir(mode=0o700)
+            created = True
+            check_budget()
+            header = raw.model_dump_json(exclude={"pages"})
+            with temporary.open("x", encoding="utf-8") as handle:
+                handle.write(header[:-1] + ',"pages":[')
+                for index, page in enumerate(raw.pages):
+                    check_budget()
+                    serialized = page.model_dump_json()
+                    check_budget()
+                    (generation / f"{index}.json").write_text(serialized, encoding="utf-8")
+                    handle.write(("," if index else "") + serialized)
+                handle.write("]}\n")
+            check_budget()
+            temporary.replace(directory / "raw.json")
+            published = True
+        except OSError as exc:
+            logger.exception("Cannot persist raw geometry for job %s", job_id)
+            raise StorageError() from exc
+        finally:
+            try:
+                temporary.unlink(missing_ok=True)
+                if created and not published:
+                    shutil.rmtree(generation)
+            except OSError:
+                # Preserve the analysis/persistence error if cleanup also fails.
+                logger.exception("Cannot clean raw generation for job %s", job_id)
+
+    def load_raw_page(self, job: Job, page_index: int) -> RawPage:
+        if (
+            job.status != JobStatus.COMPLETED
+            or job.raw_summary is None
+            or not 0 <= page_index < len(job.raw_summary.pages)
+        ):
+            raise UserError("Pagina non trovata.", 404)
+        directory = self.directory(job.job_id)
+        parent = directory / "raw_pages"
+        generation = parent / str(job.raw_summary.extraction_id)
+        path = generation / f"{page_index}.json"
+        try:
+            if any(item.is_symlink() for item in (parent, generation, path)):
+                raise StorageError()
+            page = RawPage.model_validate_json(path.read_text(encoding="utf-8"))
+            if page.page_index != page_index:
+                raise StorageError()
+            return page
+        except (OSError, ValidationError, UnicodeError) as exc:
+            logger.exception("Cannot read raw page for job %s", job.job_id)
+            raise StorageError() from exc
+
 
 class JobService:
     def __init__(self, settings: Settings) -> None:
@@ -102,11 +172,15 @@ class JobService:
             self.store.save(job)
             job.source_size_bytes = self._copy_source(upload, temporary)
             temporary.replace(directory / "source.pdf")
-            job.document, job.warnings = inspect_pdf(
+            extraction = extract_pdf(
                 directory / "source.pdf",
                 max_pages=self.settings.max_pdf_pages,
                 max_analysis_seconds=self.settings.max_pdf_analysis_seconds,
             )
+            self.store.save_raw(job.job_id, extraction.raw, extraction.check_budget)
+            job.document, job.warnings = extraction.document, extraction.warnings
+            job.raw_summary = extraction.raw.summary()
+            extraction.check_budget()
             job.status = JobStatus.COMPLETED
             job.updated_at = datetime.now(UTC)
             self.store.save(job)
@@ -143,6 +217,7 @@ class JobService:
     def _fail(self, job: Job, message: str, status_code: int) -> tuple[Job, int]:
         job.status = JobStatus.FAILED
         job.document = None
+        job.raw_summary = None
         job.errors = [message]
         job.updated_at = datetime.now(UTC)
         # If persistence also fails, return a storage error, never a success page.

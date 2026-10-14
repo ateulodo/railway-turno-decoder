@@ -10,8 +10,9 @@ from starlette.exceptions import HTTPException
 from starlette.requests import ClientDisconnect
 from starlette.responses import RedirectResponse, Response
 
-from railway_turno_decoder.errors import UserError
+from railway_turno_decoder.errors import PDFInspectionError, UserError
 from railway_turno_decoder.jobs import JobService
+from railway_turno_decoder.pdf.render import render_page
 from railway_turno_decoder.web.views import home_response
 
 logger = logging.getLogger(__name__)
@@ -68,14 +69,63 @@ async def create_job(request: Request) -> Response:
 
 @router.get("/jobs/{job_id}")
 async def job_detail(request: Request, job_id: str) -> Response:
-    try:
-        parsed_id = UUID(job_id)
-        if str(parsed_id) != job_id:
-            raise ValueError
-    except ValueError as exc:
-        raise UserError("Job non trovato.", 404) from exc
+    parsed_id = canonical_job_id(job_id)
     service: JobService = request.app.state.job_service
     job = await run_in_threadpool(service.store.load, parsed_id)
     return request.app.state.templates.TemplateResponse(
         request=request, name="job.html", context={"job": job}
+    )
+
+
+def canonical_job_id(value: str) -> UUID:
+    try:
+        parsed = UUID(value)
+        if str(parsed) != value:
+            raise ValueError
+        return parsed
+    except ValueError as exc:
+        raise UserError("Job non trovato.", 404) from exc
+
+
+async def inspector_data(request: Request, job_id: str, page_index: int):
+    service = request.app.state.job_service
+    job = await run_in_threadpool(service.store.load, canonical_job_id(job_id))
+    page = await run_in_threadpool(service.store.load_raw_page, job, page_index)
+    return service, job, page
+
+
+@router.get("/jobs/{job_id}/pages/{page_index}")
+async def page_inspector(request: Request, job_id: str, page_index: int) -> Response:
+    _, job, page = await inspector_data(request, job_id, page_index)
+    return request.app.state.templates.TemplateResponse(
+        request=request,
+        name="inspector.html",
+        context={
+            "job": job,
+            "page": page,
+            "words": [word.model_dump(mode="json") for word in page.words],
+        },
+    )
+
+
+@router.get("/jobs/{job_id}/pages/{page_index}/image.png")
+async def page_image(
+    request: Request, job_id: str, page_index: int, scale: float = 1.25
+) -> Response:
+    service, job, _ = await inspector_data(request, job_id, page_index)
+    try:
+        png = await run_in_threadpool(
+            render_page,
+            service.store.directory(job.job_id) / "source.pdf",
+            page_index,
+            scale,
+            max_pages=service.settings.max_pdf_pages,
+            max_analysis_seconds=service.settings.max_pdf_analysis_seconds,
+        )
+    except PDFInspectionError as exc:
+        raise UserError(str(exc), 422) from exc
+    return Response(
+        png,
+        media_type="image/png",
+        headers={"Cache-Control": "no-store", "X-Content-Type-Options": "nosniff"},
     )

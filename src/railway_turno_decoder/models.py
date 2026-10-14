@@ -7,6 +7,8 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from railway_turno_decoder.raw_models import RawSummary
+
 
 class StrictModel(BaseModel):
     model_config = ConfigDict(extra="forbid")
@@ -53,6 +55,7 @@ class Job(StrictModel):
     updated_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
     source_size_bytes: int = Field(default=0, ge=0)
     document: DocumentInfo | None = None
+    raw_summary: RawSummary | None = None
     warnings: list[str] = Field(default_factory=list)
     errors: list[str] = Field(default_factory=list)
 

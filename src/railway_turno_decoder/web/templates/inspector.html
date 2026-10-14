@@ -1,0 +1,32 @@
+{% extends "base.html" %}
+{% block content %}
+<a href="/jobs/{{ job.job_id }}">← Riepilogo documento</a>
+<h1>Inspector · Pagina {{ page.page_number }}</h1>
+<p>{{ page.page_type }} · {{ '%.2f'|format(page.width) }} × {{ '%.2f'|format(page.height) }} pt · rotazione {{ page.rotation }}°</p>
+<nav aria-label="Pagine">
+{% if page.page_index > 0 %}<a href="/jobs/{{ job.job_id }}/pages/{{ page.page_index - 1 }}">← Precedente</a>{% endif %}
+{% if page.page_number < job.document.page_count %}<a href="/jobs/{{ job.job_id }}/pages/{{ page.page_index + 1 }}">Successiva →</a>{% endif %}
+</nav>
+<div class="inspector-controls">
+<label><input type="checkbox" data-layer="rows" checked> Righe</label>
+<label><input type="checkbox" data-layer="words"> Token</label>
+<label><input type="checkbox" data-layer="drawings"> Drawing bbox</label>
+<label>Token <select id="token-select"><option value="">Seleziona</option>{% for word in page.words %}<option value="{{ word.word_index }}">{{ word.word_index }} · {{ word.text }}</option>{% endfor %}</select></label>
+</div>
+<pre id="token-details" aria-live="polite">Seleziona un token per visualizzare testo, coordinate e riferimenti raw.</pre>
+<div class="page-inspector" style="aspect-ratio: {{ page.width }} / {{ page.height }}">
+<img src="/jobs/{{ job.job_id }}/pages/{{ page.page_index }}/image.png" alt="Rendering pagina {{ page.page_number }}" draggable="false">
+<svg viewBox="0 0 {{ page.width }} {{ page.height }}" aria-label="Overlay geometrici">
+<g id="layer-rows">{% for row in page.rows %}{% set b = row.display_bbox %}<rect class="row-box" x="{{ b[0] }}" y="{{ b[1] }}" width="{{ b[2]-b[0] }}" height="{{ b[3]-b[1] }}"><title>Riga {{ row.row_index }} · {{ row.periodicity_marker }} · {{ row.service_number or 'ambiguo/assente' }}</title></rect>{% endfor %}</g>
+<g id="layer-drawings" hidden>{% for drawing in page.drawings %}{% set b = drawing.display_bbox %}<rect class="drawing-box" x="{{ b[0] }}" y="{{ b[1] }}" width="{{ [0.5, b[2]-b[0]]|max }}" height="{{ [0.5, b[3]-b[1]]|max }}"><title>Drawing {{ drawing.drawing_index }} · {{ drawing.type }} · {{ drawing.items|length }} primitive</title></rect>{% endfor %}</g>
+<g id="layer-words" hidden>{% for word in page.words %}{% set b = word.display_bbox %}<rect class="word-box" data-word="{{ word.word_index }}" x="{{ b[0] }}" y="{{ b[1] }}" width="{{ b[2]-b[0] }}" height="{{ b[3]-b[1] }}"><title>{{ word.word_index }} · {{ word.text }}</title></rect>{% endfor %}</g>
+</svg>
+</div>
+<section class="card"><h2>Rilevamento strutturale</h2>
+{% for reason in page.classification_reasons %}<p><code>{{ reason.code }}</code> · word {{ reason.word_indices }} · drawing {{ reason.drawing_indices }}</p>{% endfor %}
+{% for warning in page.warnings %}<p>{{ warning }}</p>{% endfor %}
+{% for row in page.rows %}<details><summary>Riga {{ row.row_index }} · {{ row.periodicity_marker }} · {{ row.service_number or 'ambiguo/assente' }}</summary><pre>{{ row.model_dump_json(indent=2) }}</pre></details>{% endfor %}
+</section>
+<script type="application/json" id="raw-words">{{ words|tojson }}</script>
+<script src="{{ url_for('static', path='/inspector.js') }}" defer></script>
+{% endblock %}

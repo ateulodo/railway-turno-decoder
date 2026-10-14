@@ -126,7 +126,12 @@ def test_filename_cannot_build_paths(
     directories = list(jobs_root.iterdir())
     assert len(directories) == 1
     assert UUID(directories[0].name).version == 4
-    assert {path.name for path in directories[0].iterdir()} == {"source.pdf", "job.json"}
+    assert {path.name for path in directories[0].iterdir()} == {
+        "source.pdf",
+        "job.json",
+        "raw.json",
+        "raw_pages",
+    }
     assert not (settings.data_dir.parent / "escape.pdf").exists()
     data = json.loads((directories[0] / "job.json").read_text())
     assert data["original_filename"] == filename
@@ -212,7 +217,7 @@ def test_unexpected_processing_failure_is_persisted(
     def broken_reader(path: Path, **limits: object) -> None:
         raise RuntimeError("Private internal failure details")
 
-    monkeypatch.setattr("railway_turno_decoder.jobs.inspect_pdf", broken_reader)
+    monkeypatch.setattr("railway_turno_decoder.jobs.extract_pdf", broken_reader)
     response = client.post("/jobs", files={"file": ("test.pdf", pdf_bytes)})
     assert response.status_code == 500
     assert "Private internal failure" not in response.text

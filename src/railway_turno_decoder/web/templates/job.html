@@ -41,5 +41,13 @@
   </div>
 </section>
 {% endif %}
+{% if job.raw_summary %}
+<section class="card"><h2>Estrazione raw · schema {{ job.raw_summary.raw_schema_version }}</h2>
+<p>SHA-256 <code>{{ job.raw_summary.sha256 }}</code></p>
+<p>{{ job.raw_summary.row_count }} regioni di riga · {% for kind, count in job.raw_summary.page_type_counts.items() %}{{ kind }}: {{ count }}{% if not loop.last %} · {% endif %}{% endfor %}</p>
+<table><thead><tr><th>Pagina / Inspector</th><th>Tipo</th><th>Token / Drawing</th><th>Righe: numero raw · marker</th></tr></thead><tbody>
+{% for page in job.raw_summary.pages %}<tr><td><a href="/jobs/{{ job.job_id }}/pages/{{ page.page_index }}">{{ page.page_index + 1 }}</a></td><td>{{ page.page_type }}</td><td>{{ page.word_count }} / {{ page.drawing_count }}</td><td>{% for row in page.rows %}{{ row.service_number or '?' }} · {{ row.periodicity_marker }}{% if not loop.last %}; {% endif %}{% endfor %}</td></tr>{% endfor %}
+</tbody></table></section>
+{% elif job.document %}<p>Job precedente alla Milestone 2: nessuna geometria raw disponibile. Carica nuovamente il PDF per usare l’inspector.</p>{% endif %}
 <aside class="scope-note"><strong>Analisi preliminare</strong><p>Il decoder SGI non è ancora implementato. Non sono stati interpretati turni, treni, orari o giornate.</p></aside>
 {% endblock %}
