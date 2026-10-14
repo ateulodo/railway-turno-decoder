@@ -17,6 +17,7 @@
 <label><input type="checkbox" data-layer="endpoint-labels"> Endpoint labels</label>
 <label>Riga temporale <select id="temporal-row"><option value="all">Tutte</option>{% for row in temporal.rows %}<option value="{{ row.row_index }}">{{ row.row_index }} · {{ page.rows[row.row_index].periodicity_marker }}</option>{% endfor %}</select></label>
 {% endif %}
+{% include "layout_controls.html" %}
 <label>Token <select id="token-select"><option value="">Seleziona</option>{% for word in page.words %}<option value="{{ word.word_index }}">{{ word.word_index }} · {{ word.text }}</option>{% endfor %}</select></label>
 </div>
 <pre id="token-details" aria-live="polite">Seleziona un token per visualizzare testo, coordinate e riferimenti raw.</pre>
@@ -43,6 +44,7 @@
 <text class="endpoint-label" x="{{ segment.right.display_point[0]+1 }}" y="{{ segment.right.display_point[1]+10 }}">{{ segment.right.clock_label or '?' }}{% if segment.right.day_offset %} +{{ segment.right.day_offset }}d{% endif %} {{ segment.right.status }}</text>
 {% endfor %}</g>{% endfor %}</g>
 {% endif %}
+{% if layout %}{% include "layout_overlay.html" %}{% endif %}
 </svg>
 </div>
 {% if temporal_error %}<p class="alert alert-warning">M3A non disponibile: {{ temporal_error }}</p>{% endif %}
@@ -53,6 +55,7 @@
 {% if row.axis %}<p>t = {{ '%.8f'|format(row.axis.mapping.minutes_per_point) }} × x + {{ '%.8f'|format(row.axis.mapping.intercept_minutes) }}; residual max {{ '%.5f'|format(row.axis.mapping.max_residual_minutes) }} min</p>{% endif %}
 <ul>{% for segment in row.segments %}<li><button type="button" data-segment="{{ row.row_index }}:{{ segment.segment_index }}">{{ segment.left.clock_label }} → {{ segment.right.clock_label }} · {{ segment.status }}</button></li>{% endfor %}</ul>
 </details>{% endfor %}</section>{% endif %}
+{% include "layout_details.html" %}
 <section class="card"><h2>Rilevamento strutturale</h2>
 {% for reason in page.classification_reasons %}<p><code>{{ reason.code }}</code> · word {{ reason.word_indices }} · drawing {{ reason.drawing_indices }}</p>{% endfor %}
 {% for warning in page.warnings %}<p>{{ warning }}</p>{% endfor %}
@@ -61,4 +64,6 @@
 <script type="application/json" id="raw-words">{{ words|tojson }}</script>
 <script type="application/json" id="temporal-data">{{ temporal_data|tojson }}</script>
 <script src="{{ url_for('static', path='/inspector.js') }}" defer></script>
+<script type="application/json" id="layout-data">{{ layout_data|tojson }}</script>
+<script src="{{ url_for('static', path='/layout.js') }}" defer></script>
 {% endblock %}

@@ -1,0 +1,9 @@
+{% if layout_error %}<p class="alert alert-warning">M3B non disponibile: {{ layout_error }}</p>{% endif %}
+{% if layout %}<section class="card"><h2>M3B · Struttura visuale</h2>
+<p>Layout {{ layout.schema_version }} · <a href="/jobs/{{ job.job_id }}/pages/{{ page.page_index }}/layout.json">JSON layout</a>. START_SLOT e END_SLOT indicano soltanto corsie grafiche. I gap restano senza valore; tutte le alternative sono conservate nei dettagli.</p>
+{% for row in layout.rows %}<details><summary>Riga {{ row.row_index }} · {{ row.status }} · {{ row.clusters|length }} cluster · {{ row.minute_tokens|length }} minute token · stream {{ row.stream_status }}</summary>
+<p>Bande: {% for b in row.bands %}B{{ b.band_index }} {{ b.role }} ({{ b.word_indices|length }}, {{ b.status }}) {% endfor %}</p>
+<ol>{% for b in row.stream_blocks %}<li>{{ b.status }}: {% for i in b.token_indices %}{% set t = row.minute_tokens[i] %}<button type="button" data-layout-kind="minute_tokens" data-layout-row="{{ row.row_index }}" data-layout-index="{{ i }}">{{ t.raw_text }} · B{{ t.band_index or '?' }} · {% for h in t.hour_candidates %}{{ h.clock_label }}{% if h.day_offset %} +{{ h.day_offset }}d{% endif %} {% endfor %}</button>{% endfor %}</li>{% endfor %}</ol>
+<ul>{% for g in row.gaps %}<li><button type="button" data-layout-kind="gaps" data-layout-row="{{ row.row_index }}" data-layout-index="{{ g.gap_index }}">Gap {{ g.expected_role }} · {{ g.status }} · {{ g.before_token_index }} → {{ g.after_token_index }}</button></li>{% endfor %}</ul>
+<ul>{% for c in row.clusters %}<li><button type="button" data-layout-kind="clusters" data-layout-row="{{ row.row_index }}" data-layout-index="{{ c.cluster_index }}">{{ c.fragments|join(' · ') }} · {{ c.segment_status }} · candidati {{ c.candidate_segment_indices }}</button></li>{% endfor %}</ul>
+</details>{% endfor %}</section>{% endif %}

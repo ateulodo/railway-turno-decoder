@@ -78,3 +78,14 @@ footer { max-width: 1160px; margin: auto; padding: 22px 32px; border-top: 1px so
 .temporal-segment.status-AMBIGUOUS { stroke: #d97706; fill: #d97706; }
 .temporal-segment.status-INVALID { stroke: #dc2626; fill: #dc2626; }
 .endpoint-label { font-size: 4px; fill: #4338ca; paint-order: stroke; stroke: white; stroke-width: 1px; pointer-events: none; }
+
+.layout-cluster { fill: #0d94881a; stroke: #0d9488; stroke-width: .7; cursor: pointer; }
+.minute-band { stroke: #0284c7; stroke-width: 1.5; opacity: .35; pointer-events: none; }
+.band-2, .band-4 { stroke: #7c3aed; }
+.band-label { font-size: 3px; fill: #0369a1; pointer-events: none; }
+.layout-minute { fill: #2563eb22; stroke: #2563eb; stroke-width: .5; cursor: pointer; }
+.layout-pair { fill: none; stroke: #059669; stroke-width: .7; stroke-dasharray: 2 1; cursor: pointer; pointer-events: all; }
+.layout-below { fill: #db277722; stroke: #db2777; stroke-width: .7; cursor: pointer; }
+.layout-relation { stroke: #0d9488; stroke-width: 1; cursor: pointer; }
+.layout-ambiguity { fill: #f59e0b22; stroke: #d97706; stroke-width: .8; cursor: pointer; }
+.layout-relation.status-AMBIGUOUS, .layout-pair.status-AMBIGUOUS { stroke: #d97706; }

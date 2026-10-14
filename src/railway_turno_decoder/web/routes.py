@@ -8,10 +8,11 @@ from starlette.concurrency import run_in_threadpool
 from starlette.datastructures import UploadFile
 from starlette.exceptions import HTTPException
 from starlette.requests import ClientDisconnect
-from starlette.responses import RedirectResponse, Response
+from starlette.responses import JSONResponse, RedirectResponse, Response
 
 from railway_turno_decoder.errors import PDFInspectionError, UserError
 from railway_turno_decoder.jobs import JobService
+from railway_turno_decoder.layout.storage import LayoutStore
 from railway_turno_decoder.pdf.render import render_page
 from railway_turno_decoder.temporal.storage import TemporalStore
 from railway_turno_decoder.web.views import home_response
@@ -100,6 +101,8 @@ async def page_inspector(request: Request, job_id: str, page_index: int) -> Resp
     service, job, page = await inspector_data(request, job_id, page_index)
     temporal = None
     temporal_error = None
+    layout = None
+    layout_error = None
     if page.page_type == "DUTY_DIAGRAM":
         try:
             temporal = await run_in_threadpool(
@@ -111,6 +114,17 @@ async def page_inspector(request: Request, job_id: str, page_index: int) -> Resp
         except UserError as exc:
             # Derived-cache failure must not prevent read-only M2 inspection.
             temporal_error = exc.message
+        if temporal is not None:
+            try:
+                layout = await run_in_threadpool(
+                    LayoutStore(service.store).get_or_analyze,
+                    job,
+                    page,
+                    temporal,
+                    max_analysis_seconds=service.settings.max_pdf_analysis_seconds,
+                )
+            except UserError as exc:
+                layout_error = exc.message
     return request.app.state.templates.TemplateResponse(
         request=request,
         name="inspector.html",
@@ -121,6 +135,9 @@ async def page_inspector(request: Request, job_id: str, page_index: int) -> Resp
             "temporal": temporal,
             "temporal_data": temporal.model_dump(mode="json") if temporal else None,
             "temporal_error": temporal_error,
+            "layout": layout,
+            "layout_data": layout.model_dump(mode="json") if layout else None,
+            "layout_error": layout_error,
         },
     )
 
@@ -157,6 +174,46 @@ async def temporal_page(request: Request, job_id: str, page_index: int) -> Respo
         page,
         max_analysis_seconds=service.settings.max_pdf_analysis_seconds,
     )
+    return Response(
+        result.model_dump_json(),
+        media_type="application/json",
+        headers={"Cache-Control": "no-store", "X-Content-Type-Options": "nosniff"},
+    )
+
+
+@router.get("/jobs/{job_id}/pages/{page_index}/layout.json")
+async def layout_page(
+    request: Request, job_id: str, page_index: int, row_index: int | None = None
+) -> Response:
+    service, job, page = await inspector_data(request, job_id, page_index)
+    if row_index is not None and not 0 <= row_index < len(page.rows):
+        raise UserError("Riga layout non disponibile.", 404)
+    temporal = await run_in_threadpool(
+        TemporalStore(service.store).get_or_analyze,
+        job,
+        page,
+        max_analysis_seconds=service.settings.max_pdf_analysis_seconds,
+    )
+    result = await run_in_threadpool(
+        LayoutStore(service.store).get_or_analyze,
+        job,
+        page,
+        temporal,
+        max_analysis_seconds=service.settings.max_pdf_analysis_seconds,
+    )
+    headers = {"Cache-Control": "no-store", "X-Content-Type-Options": "nosniff"}
+    if row_index is not None:
+        return JSONResponse(
+            {
+                **result.rows[row_index].model_dump(mode="json"),
+                **{
+                    key: value
+                    for key, value in result.model_dump(mode="json").items()
+                    if key != "rows"
+                },
+            },
+            headers=headers,
+        )
     return Response(
         result.model_dump_json(),
         media_type="application/json",

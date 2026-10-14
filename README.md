@@ -6,15 +6,18 @@ Il progetto è completamente indipendente da inAgenda: non ne usa codice,
 database, backend o modelli. Un eventuale collegamento futuro avverrà tramite
 un formato esportato.
 
-## Stato: Milestone 3A
+## Stato: Milestone 3B
 
 Sono disponibili upload sicuro, raw geometrico M2, classificazione strutturale,
 regioni di riga e inspector. La M3A aggiunge assi temporali, mapping geometrico
 x ↔ minuti ed endpoint di segmenti candidati, senza associazioni ferroviarie.
+La M3B ricostruisce cluster testuali, corsie numeriche, candidati orari, ordine
+parziale, gap e relazioni geometriche molti-a-molti, in un artefatto separato.
 **Il decoder SGI non è ancora implementato.** Non si interpretano numeri treno,
 stazioni, parentesi, accessori o significati di linee e tratteggi. Nessun OCR,
 AI, database, coda, multiprocessing, export Excel o API per inAgenda.
 Il raw M2 resta immutato e distinto dai risultati temporali derivati.
+Anche la geometria temporale M3A rimane immutabile.
 
 ## Requisiti e installazione locale
 
@@ -66,6 +69,7 @@ Ferma il server con `Ctrl+C`.
 | `GET /jobs/{job_id}` | Riepilogo documento, tipi di pagina, righe e collegamenti inspector |
 | `GET /jobs/{job_id}/pages/{page_index}` | Inspector della pagina, indice da zero |
 | `GET /jobs/{job_id}/pages/{page_index}/image.png?scale=1.25` | Rendering PNG controllato e on-demand |
+| `GET /jobs/{job_id}/pages/{page_index}/layout.json` | M3B derivata on-demand; filtro opzionale `?row_index=N` |
 | `GET /jobs/{job_id}/pages/{page_index}/temporal.json` | M3A derivata on-demand, solo DUTY_DIAGRAM completati |
 
 L'upload ordinario termina con redirect `303` al risultato. HTMX usa
@@ -135,6 +139,7 @@ railway-turno-decoder/
 │   │   └── render.py
 │   ├── parser/{__init__,page_classifier,row_detector}.py
 │   ├── temporal/{models,tolerances,axis,segments,analysis,storage}.py
+│   ├── layout/{models,tolerances,geometry,typography,stream,relations,identity,analysis,validation,storage,statistics}.py
 │   ├── rules/__init__.py
 │   ├── validation/__init__.py
 │   ├── export/__init__.py
@@ -143,13 +148,13 @@ railway-turno-decoder/
 │       ├── routes.py
 │       ├── middleware.py
 │       ├── views.py
-│       ├── templates/{base,index,job,inspector}.html
-│       └── static/{app.css,app.js,inspector.js,htmx.min.js,htmx.LICENSE}
-├── scripts/{inspect_local,inspect_temporal}.py
+│       ├── templates/{base,index,job,inspector,layout_controls,layout_overlay,layout_details}.html
+│       └── static/{app.css,app.js,inspector.js,layout.js,htmx.min.js,htmx.LICENSE}
+├── scripts/{inspect_local,inspect_temporal,inspect_layout}.py
 └── tests/
-    ├── conftest.py
-    ├── unit/{test_config,test_reader,test_jobs,test_dependencies,test_geometry,test_temporal}.py
-    └── integration/{test_web,test_stream_limit,test_raw_inspector,test_temporal_web}.py
+    ├── {conftest,layout_fixtures}.py
+    ├── unit/{test_config,test_reader,test_jobs,test_dependencies,test_geometry,test_temporal,test_layout}.py
+    └── integration/{test_web,test_stream_limit,test_raw_inspector,test_temporal_web,test_layout_web}.py
 ```
 
 - `main.py`: factory FastAPI, dipendenze applicative e gestione degli errori.
@@ -604,6 +609,181 @@ Limiti deliberati: inferenza geometrica di layout supportati, precisione della
 geometria PDF, soli segmenti rettilinei prevalentemente orizzontali, label
 sovrapposte o spostate lasciate AMBIGUOUS, nessun collegamento segmento/treno,
 nessuna interpretazione degli accessori o estensione tramite header.
+
+## M3B: ricostruzione della struttura visuale
+
+`railway-turno-decoder.layout`, schema **0.1**, algoritmo **0.1.1**, consuma
+`RawPage` e `TemporalPage` immutabili. Conserva SHA-256, raw generation,
+identità SHA-256 del contenuto M3A, page/row refs, tolleranze, coordinate display
+in punti e riferimenti alle word/primitive sorgenti. Non rilegge coordinate
+native, rotazione o box PDF. Le primitive rimangono referenziate attraverso
+M3A; non sono duplicate nel layout.
+
+### Cluster, regioni numeriche e bande
+
+I cluster sono componenti connesse di bbox vicine: baseline e gap per testi
+orizzontali, allineamento dei centri X e gap verticale per colonne. Le word
+alte e strette non sono unite orizzontalmente fra colonne. I frammenti restano
+letterali, compresa la punteggiatura; nelle colonne l'ordine è dall'alto al
+basso. Componenti con orientamento misto restano `AMBIGUOUS`. Nessuna parola,
+prefisso, parentesi o lunghezza di numero decide il clustering.
+
+Gli anchor di riga, gli hour anchor M3A e l'evidenza numerica degli endpoint
+non risolta nella minute zone sono esclusioni esplicite, con ref e motivo.
+Una word numerica ASCII di una/due cifre, valore 00..59, può essere minute-like
+soltanto nella regione fra asse e parte inferiore della riga, entro l'estensione
+X dell'asse e con larghezza limitata rispetto alla hour spacing.
+
+Le posizioni Y sono normalizzate rispetto all'asse e all'altezza mediana dei
+glifi degli hour anchor. I modi Y condivisi della pagina determinano quattro
+bande dall'alto al basso. Bande dispari: `START_SLOT`; pari: `END_SLOT`.
+Questi nomi indicano corsie grafiche, senza significato ferroviario.
+Una riga può avere bande vuote pur condividendo il template completo della
+pagina. Se la pagina offre meno di quattro modi, si conservano tutte le
+combinazioni ordinate di slot compatibili in `band_phase_candidates` e i
+relativi `observed_band_groups`: le alternative di fase sono correlate,
+non assegnazioni indipendenti. Più di quattro modi restano irrisolti.
+
+La regione sotto l'asse usa una ricerca a livello pagina per attribuire ogni
+numero all'asse precedente più vicino. Può estendersi oltre il bbox della
+riga M2: `BELOW_AXIS_EXTENSION` rende questa provenance esplicita senza
+modificare le righe raw. `BelowAxisNumericEvidence` conserva valore, word ref,
+bbox, cluster/segmenti vicini e misure; non è una durata né un accessorio.
+
+### Hour neighborhood, stream, coppie e gap
+
+Per ogni valore minute-like si cercano tutte le ore il cui punto
+`hour*60 + minute` sul mapping M3A cade nel bbox allargato di una frazione
+limitata della hour spacing. Il bbox non viene convertito in un endpoint
+vettoriale. L'estensione dell'asse limita i candidati; larghezza e margine
+ammettono al massimo due ore. Il dominio temporale è delimitato dalle ore
+osservate del primo/ultimo anchor M3A: un residuo del fit al bordo non deve
+escludere l'ora dell'anchor tramite `ceil`/`floor`. Il mapping e il margine
+tipografico restano invariati; non sono ammesse ore esterne agli anchor.
+Nessuna ora viene scelta con un punteggio.
+
+Lo stream è un ordine parziale di intervalli di minuti candidati: intervalli
+disgiunti hanno ordine temporale certo, intervalli sovrapposti formano blocchi
+ambigui. **Non è un ordinamento globale per X.** Ogni candidato resta sul suo
+token e un blocco ambiguo non viene trasformato in una sequenza totale.
+
+Le `EXPLICIT_PAIR` collegano slot opposti con gap orizzontale locale e ordine
+temporale crescente entro il limite configurato. Non esiste un vincolo di
+coppia banda 1/2 o 3/4. Tutte le coppie ammissibili sono conservate; più coppie
+per membro, più ordini temporali o membri ambigui rendono la coppia ambigua.
+Il limite temporale è un vincolo di raggruppamento visuale, senza verifica
+delle durate ferroviarie.
+
+Due slot consecutivi con lo stesso ruolo producono un gap del ruolo opposto;
+sono registrati anche END iniziali e START finali aperti. Blocchi ambigui
+interrompono la continuità; token locali irrisolti sono alternative esplicite.
+I gap non contengono un tempo inferito e non ereditano valori precedenti.
+Per le sequenze aperte la ricerca include il prefisso/suffisso visuale
+osservato, invece del solo bbox dell'evento rimasto. Un token irrisolto è
+un'alternativa soltanto se la sua banda ammette il ruolo mancante e il suo
+bbox interseca la regione del gap; eventuali ore già disponibili devono
+anche essere compatibili con l'intervallo parziale. Questo filtro di
+pertinenza non ordina lo stream per X e non assegna ore ai token irrisolti.
+
+### Relazioni, stati e determinismo
+
+Le relazioni conservano overlap/gap X, gap Y, centri, distanza euclidea,
+distanza normalizzata alla hour spacing, posizione relativa e, per segmenti,
+distanze da inizio/fine/centro. Sono disponibili cluster→minute/pair/below/
+segment e cluster consecutivi; l'evidenza below conserva anche relazioni
+dirette verso segmenti. I candidati cluster↔segment sono many-to-many.
+
+`UNIQUE` significa unicità secondo i vincoli geometrici registrati;
+`AMBIGUOUS` conserva alternative e reasons; `UNASSOCIATED` indica assenza di
+candidati; `INVALID` indica violazioni strutturali. Una relazione cluster/
+segment è UNIQUE soltanto quando entrambi i nodi hanno grado uno. Gli altri
+archi sono misure geometriche, non assegnazioni di attività. Non vengono
+prodotte percentuali di confidence. Il riepilogo di riga propaga ambiguità di
+stream, cluster, coppie e associazioni below/segment.
+
+Refs senza ordine geometrico sono canonicalizzati. L'ordine dei frammenti
+visuali e degli anchor temporali è preservato. L'identità M3A normalizza
+soltanto liste di provenance prive di ordine significativo. I modelli sorgenti
+sono revalidati e copiati; analisi, cache e inspector non li modificano.
+
+### Tolleranze e limiti M3B
+
+Tutti i parametri sono in `layout/tolerances.py`, validati e registrati negli
+artefatti; nessuna coordinata assoluta del documento è incorporata.
+
+| Parametro | Default | Unità e scopo |
+| --- | ---: | --- |
+| `text_baseline_height` | 0.25 | Altezza minore dei due testi; disallineamento baseline |
+| `text_gap_height` | 0.65 | Altezza minore; gap orizzontale/verticale del cluster |
+| `text_column_width` | 0.25 | Larghezza minore; allineamento centri della colonna |
+| `text_tall_aspect` | 1.2 | Rapporto altezza/larghezza per separare colonne strette |
+| `minute_zone_row_height` | 0.32 | Altezza riga; profondità della regione sopra asse |
+| `band_y_height` | 0.18 | Altezza mediana hour glyph; raggruppamento e membership Y |
+| `below_min_height` | 0.1 | Altezza hour glyph; distanza minima sotto asse e bordo minute zone |
+| `below_max_height` | 1.8 | Altezza hour glyph; estensione massima sotto asse |
+| `pair_gap_width` | 0.8 | Larghezza minore dei minute token; gap della coppia |
+| `pair_max_hours` | 2 | Ore; limite di ordine della coppia visuale |
+| `hour_shift_spacing` | 0.18 | Hour spacing; margine tipografico X, strettamente <0.25 |
+| `minute_width_spacing` | 0.75 | Hour spacing; larghezza massima minute-like |
+| `relation_gap_spacing` | 0.12 | Hour spacing; gap X delle relazioni locali |
+| `relation_vertical_row` | 0.7 | Altezza riga; gap Y delle relazioni locali |
+| `max_row_words` | 1024 | Budget word per riga; superamento → INVALID |
+| `max_relations` | 20000 | Budget archi per riga; superamento → errore controllato |
+| `numeric_digits` | 9 | Lunghezza massima numeri below; nessuna classificazione semantica |
+
+Indici X ordinati e ricerche binarie limitano i confronti a vicinati locali;
+non si costruisce il prodotto cartesiano globale fra word e segmenti.
+Il costo dipende anche dai candidati effettivamente vicini: geometrie dense
+possono ancora richiedere confronti quadratici locali, limitati dai budget.
+Il budget cooperativo di pagina usa `MAX_PDF_ANALYSIS_SECONDS`, senza processi
+aggiuntivi e senza interrompere forzatamente una singola chiamata Python.
+
+### Persistenza, API e inspector
+
+```text
+data/jobs/<uuid>/layout/<raw_generation>/<m3a_content_sha256>/<algorithm_and_tolerances_hash>/<page_index>.json
+```
+
+La pubblicazione usa un file temporaneo esclusivo e replace atomico, con
+cleanup in caso di errore. Job/source identity, algorithm/config e symlink
+sono controllati. Una nuova identità crea un namespace distinto. Una cache
+corrotta produce `StorageError` controllato e non viene sovrascritta.
+La validazione cross-layer controlla identità, righe, membership e partizione
+word, bbox/testo, hour/segment refs, bande/fasi, coppie, stream/gap, metriche e
+reciprocità degli archi. Non riesegue il clustering testuale né il fit M3A.
+La cache è locale e derivata, senza attestazione crittografica contro un
+operatore che possa riscrivere coerentemente l'intero artefatto.
+
+L'algoritmo **0.1.1** corregge esclusivamente i limiti orari agli anchor e
+la pertinenza dei token irrisolti nei gap. Lo schema resta **0.1** e tutte
+le tolleranze rimangono invariate. La versione entra nell'hash del namespace:
+le cache **0.1.0** sono conservate e non lette né sovrascritte dal nuovo
+algoritmo; un vecchio artefatto nel namespace corrente è rifiutato.
+
+`GET /jobs/{uuid}/pages/{index}/layout.json` genera o legge il layout;
+`?row_index=N` restituisce la riga richiesta, con le identità di pagina.
+Gli stessi gate UUID/job/page del raw proteggono gli accessi. Una failure M3B
+lascia disponibili raw, PNG e M3A nell'inspector. I sette toggle indipendenti
+mostrano cluster, bande, minute token, coppie, below, relazioni e ambiguità;
+i click espongono refs, geometria, tutti i candidati, identità e reasons.
+Layer sovrapposti si possono spegnere individualmente per selezionare un
+oggetto sottostante. I testi PDF sono escaped nei template e i dettagli JS
+usano `textContent`.
+
+```sh
+python scripts/inspect_layout.py --data-dir data --job-id UUID_DEL_JOB
+```
+
+Lo script produce statistiche strutturali e distribuzioni delle distanze;
+i report locali su PDF riservati vanno mantenuti sotto `data/` ignorato.
+I passaggi di mezzanotte dello stream di label e quelli dei segmenti M3A sono
+misure distinte, non attraversamenti operativi certificati.
+
+Limiti deliberati: geometria tipografica supportata da verificare su altri
+layout; fasi di banda incomplete e vicinati senza ora possono restare
+irrisolti; tutte le associazioni sono candidate geometriche. Nessuna
+interpretazione SGI, treno/stazione/attività, correzione M3A, riempimento gap,
+verifica durata, OCR, AI, analisi raster, database o coda è introdotta.
 
 ## PDF reali e Git
 

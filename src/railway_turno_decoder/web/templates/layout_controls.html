@@ -1,0 +1,5 @@
+{% if layout %}
+{% for id, label in [('text-clusters','Text clusters'),('minute-bands','Minute bands'),('minute-tokens','Minute tokens'),('explicit-pairs','Explicit pairs'),('below-axis','Below-axis evidence'),('layout-relations','Cluster/segment relations'),('layout-ambiguities','Layout ambiguities')] %}
+<label><input type="checkbox" data-layer="{{ id }}"> {{ label }}</label>
+{% endfor %}
+{% endif %}
