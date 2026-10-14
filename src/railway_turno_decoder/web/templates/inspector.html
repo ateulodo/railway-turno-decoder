@@ -11,6 +11,12 @@
 <label><input type="checkbox" data-layer="rows" checked> Righe</label>
 <label><input type="checkbox" data-layer="words"> Token</label>
 <label><input type="checkbox" data-layer="drawings"> Drawing bbox</label>
+{% if temporal %}
+<label><input type="checkbox" data-layer="time-axis"> Time axis</label>
+<label><input type="checkbox" data-layer="temporal-segments"> Temporal segments</label>
+<label><input type="checkbox" data-layer="endpoint-labels"> Endpoint labels</label>
+<label>Riga temporale <select id="temporal-row"><option value="all">Tutte</option>{% for row in temporal.rows %}<option value="{{ row.row_index }}">{{ row.row_index }} · {{ page.rows[row.row_index].periodicity_marker }}</option>{% endfor %}</select></label>
+{% endif %}
 <label>Token <select id="token-select"><option value="">Seleziona</option>{% for word in page.words %}<option value="{{ word.word_index }}">{{ word.word_index }} · {{ word.text }}</option>{% endfor %}</select></label>
 </div>
 <pre id="token-details" aria-live="polite">Seleziona un token per visualizzare testo, coordinate e riferimenti raw.</pre>
@@ -20,13 +26,39 @@
 <g id="layer-rows">{% for row in page.rows %}{% set b = row.display_bbox %}<rect class="row-box" x="{{ b[0] }}" y="{{ b[1] }}" width="{{ b[2]-b[0] }}" height="{{ b[3]-b[1] }}"><title>Riga {{ row.row_index }} · {{ row.periodicity_marker }} · {{ row.service_number or 'ambiguo/assente' }}</title></rect>{% endfor %}</g>
 <g id="layer-drawings" hidden>{% for drawing in page.drawings %}{% set b = drawing.display_bbox %}<rect class="drawing-box" x="{{ b[0] }}" y="{{ b[1] }}" width="{{ [0.5, b[2]-b[0]]|max }}" height="{{ [0.5, b[3]-b[1]]|max }}"><title>Drawing {{ drawing.drawing_index }} · {{ drawing.type }} · {{ drawing.items|length }} primitive</title></rect>{% endfor %}</g>
 <g id="layer-words" hidden>{% for word in page.words %}{% set b = word.display_bbox %}<rect class="word-box" data-word="{{ word.word_index }}" x="{{ b[0] }}" y="{{ b[1] }}" width="{{ b[2]-b[0] }}" height="{{ b[3]-b[1] }}"><title>{{ word.word_index }} · {{ word.text }}</title></rect>{% endfor %}</g>
+{% if temporal %}
+<g id="layer-time-axis" hidden>{% for row in temporal.rows %}{% if row.axis %}{% set axis = row.axis %}
+<g data-temporal-row="{{ row.row_index }}">
+<line class="time-axis" x1="{{ axis.mapping.min_x }}" y1="{{ axis.display_y }}" x2="{{ axis.mapping.max_x }}" y2="{{ axis.display_y }}" />
+{% for anchor in axis.anchors %}<g data-hour="{{ row.row_index }}:{{ loop.index0 }}" class="hour-anchor"><circle cx="{{ anchor.display_point[0] }}" cy="{{ axis.display_y }}" r="2"/><title>Hour {{ anchor.raw_label }} · {{ anchor.absolute_minutes }} min</title></g>{% endfor %}
+</g>{% endif %}{% endfor %}</g>
+<g id="layer-temporal-segments" hidden>{% for row in temporal.rows %}<g data-temporal-row="{{ row.row_index }}">{% for segment in row.segments %}
+<g class="temporal-segment status-{{ segment.status }}" data-segment="{{ row.row_index }}:{{ segment.segment_index }}">
+<line x1="{{ segment.left.display_point[0] }}" y1="{{ segment.left.display_point[1] }}" x2="{{ segment.right.display_point[0] }}" y2="{{ segment.right.display_point[1] }}"/>
+<circle cx="{{ segment.left.display_point[0] }}" cy="{{ segment.left.display_point[1] }}" r="1.5"/><circle cx="{{ segment.right.display_point[0] }}" cy="{{ segment.right.display_point[1] }}" r="1.5"/>
+<title>{{ segment.status }} · {{ segment.left.clock_label }} → {{ segment.right.clock_label }} · primitive {{ segment.source.drawing_index }}/{{ segment.source.item_index }}</title>
+</g>{% endfor %}</g>{% endfor %}</g>
+<g id="layer-endpoint-labels" hidden>{% for row in temporal.rows %}<g data-temporal-row="{{ row.row_index }}">{% for segment in row.segments %}
+<text class="endpoint-label" text-anchor="end" x="{{ segment.left.display_point[0]-1 }}" y="{{ segment.left.display_point[1]-7 }}">{{ segment.left.clock_label or '?' }}{% if segment.left.day_offset %} +{{ segment.left.day_offset }}d{% endif %} {{ segment.left.status }}</text>
+<text class="endpoint-label" x="{{ segment.right.display_point[0]+1 }}" y="{{ segment.right.display_point[1]+10 }}">{{ segment.right.clock_label or '?' }}{% if segment.right.day_offset %} +{{ segment.right.day_offset }}d{% endif %} {{ segment.right.status }}</text>
+{% endfor %}</g>{% endfor %}</g>
+{% endif %}
 </svg>
 </div>
+{% if temporal_error %}<p class="alert alert-warning">M3A non disponibile: {{ temporal_error }}</p>{% endif %}
+{% if temporal %}<section class="card"><h2>M3A · Geometria temporale</h2>
+<p>Schema {{ temporal.schema_version }} · <a href="/jobs/{{ job.job_id }}/pages/{{ page.page_index }}/temporal.json">JSON derivato</a>. I segmenti sono candidati geometrici, senza associazioni ferroviarie. EXACT indica evidenza numerica compatibile univoca; HH:MM arrotonda il tempo geometrico e non lo corregge.</p>
+{% for row in temporal.rows %}<details><summary>Riga {{ row.row_index }} · {{ row.status }} · {{ row.segments|length }} segmenti</summary>
+{% for warning in row.warnings %}<p>{{ warning }}</p>{% endfor %}
+{% if row.axis %}<p>t = {{ '%.8f'|format(row.axis.mapping.minutes_per_point) }} × x + {{ '%.8f'|format(row.axis.mapping.intercept_minutes) }}; residual max {{ '%.5f'|format(row.axis.mapping.max_residual_minutes) }} min</p>{% endif %}
+<ul>{% for segment in row.segments %}<li><button type="button" data-segment="{{ row.row_index }}:{{ segment.segment_index }}">{{ segment.left.clock_label }} → {{ segment.right.clock_label }} · {{ segment.status }}</button></li>{% endfor %}</ul>
+</details>{% endfor %}</section>{% endif %}
 <section class="card"><h2>Rilevamento strutturale</h2>
 {% for reason in page.classification_reasons %}<p><code>{{ reason.code }}</code> · word {{ reason.word_indices }} · drawing {{ reason.drawing_indices }}</p>{% endfor %}
 {% for warning in page.warnings %}<p>{{ warning }}</p>{% endfor %}
 {% for row in page.rows %}<details><summary>Riga {{ row.row_index }} · {{ row.periodicity_marker }} · {{ row.service_number or 'ambiguo/assente' }}</summary><pre>{{ row.model_dump_json(indent=2) }}</pre></details>{% endfor %}
 </section>
 <script type="application/json" id="raw-words">{{ words|tojson }}</script>
+<script type="application/json" id="temporal-data">{{ temporal_data|tojson }}</script>
 <script src="{{ url_for('static', path='/inspector.js') }}" defer></script>
 {% endblock %}

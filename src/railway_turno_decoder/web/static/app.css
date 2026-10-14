@@ -71,3 +71,10 @@ footer { max-width: 1160px; margin: auto; padding: 22px 32px; border-top: 1px so
 .word-box { fill: #0284c71a; stroke: #0284c7; stroke-width: .4; cursor: pointer; }
 .word-box.selected { fill: #f59e0b77; stroke: #d97706; stroke-width: 1; }
 #token-details, details pre { overflow: auto; max-height: 20rem; font-size: .8rem; }
+
+.time-axis { stroke: #0891b2; stroke-width: 1; pointer-events: none; }
+.hour-anchor { fill: #0891b2; cursor: pointer; }
+.temporal-segment { stroke: #7c3aed; fill: #7c3aed; stroke-width: 2; cursor: pointer; }
+.temporal-segment.status-AMBIGUOUS { stroke: #d97706; fill: #d97706; }
+.temporal-segment.status-INVALID { stroke: #dc2626; fill: #dc2626; }
+.endpoint-label { font-size: 4px; fill: #4338ca; paint-order: stroke; stroke: white; stroke-width: 1px; pointer-events: none; }

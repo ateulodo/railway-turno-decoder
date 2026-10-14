@@ -6,14 +6,15 @@ Il progetto è completamente indipendente da inAgenda: non ne usa codice,
 database, backend o modelli. Un eventuale collegamento futuro avverrà tramite
 un formato esportato.
 
-## Stato: Milestone 2
+## Stato: Milestone 3A
 
-Sono disponibili upload sicuro, job persistenti, estrazione geometrica raw,
-classificazione strutturale, regioni di riga e inspector visuale.
-**Il decoder SGI non è ancora implementato.** I token rimangono testo PDF:
-nessuna interpretazione di treni, orari, minuti, accessori, parentesi,
-periodicità operativa o significato degli stili. Nessun OCR, AI, database,
-coda, multiprocessing, export Excel o API per inAgenda.
+Sono disponibili upload sicuro, raw geometrico M2, classificazione strutturale,
+regioni di riga e inspector. La M3A aggiunge assi temporali, mapping geometrico
+x ↔ minuti ed endpoint di segmenti candidati, senza associazioni ferroviarie.
+**Il decoder SGI non è ancora implementato.** Non si interpretano numeri treno,
+stazioni, parentesi, accessori o significati di linee e tratteggi. Nessun OCR,
+AI, database, coda, multiprocessing, export Excel o API per inAgenda.
+Il raw M2 resta immutato e distinto dai risultati temporali derivati.
 
 ## Requisiti e installazione locale
 
@@ -65,6 +66,7 @@ Ferma il server con `Ctrl+C`.
 | `GET /jobs/{job_id}` | Riepilogo documento, tipi di pagina, righe e collegamenti inspector |
 | `GET /jobs/{job_id}/pages/{page_index}` | Inspector della pagina, indice da zero |
 | `GET /jobs/{job_id}/pages/{page_index}/image.png?scale=1.25` | Rendering PNG controllato e on-demand |
+| `GET /jobs/{job_id}/pages/{page_index}/temporal.json` | M3A derivata on-demand, solo DUTY_DIAGRAM completati |
 
 L'upload ordinario termina con redirect `303` al risultato. HTMX usa
 `HX-Redirect` al medesimo URL e mostra uno stato di caricamento. I rifiuti
@@ -132,6 +134,7 @@ railway-turno-decoder/
 │   │   ├── extractor.py
 │   │   └── render.py
 │   ├── parser/{__init__,page_classifier,row_detector}.py
+│   ├── temporal/{models,tolerances,axis,segments,analysis,storage}.py
 │   ├── rules/__init__.py
 │   ├── validation/__init__.py
 │   ├── export/__init__.py
@@ -142,11 +145,11 @@ railway-turno-decoder/
 │       ├── views.py
 │       ├── templates/{base,index,job,inspector}.html
 │       └── static/{app.css,app.js,inspector.js,htmx.min.js,htmx.LICENSE}
-├── scripts/inspect_local.py
+├── scripts/{inspect_local,inspect_temporal}.py
 └── tests/
     ├── conftest.py
-    ├── unit/{test_config,test_reader,test_jobs,test_dependencies,test_geometry}.py
-    └── integration/{test_web,test_stream_limit,test_raw_inspector}.py
+    ├── unit/{test_config,test_reader,test_jobs,test_dependencies,test_geometry,test_temporal}.py
+    └── integration/{test_web,test_stream_limit,test_raw_inspector,test_temporal_web}.py
 ```
 
 - `main.py`: factory FastAPI, dipendenze applicative e gestione degli errori.
@@ -440,6 +443,167 @@ nessuna gestione semantica di tabelle, treni o minuti; CropBox/rotazioni verific
 su casi sintetici, non su ogni possibile PDF; nessun timeout nativo coercibile;
 nessuna ripresa automatica dei job interrotti. Un risultato senza warning non
 costituisce una certificazione semantica di correttezza.
+
+## M3A: interpretazione geometrico-temporale
+
+`railway-turno-decoder.temporal`, schema **0.1**, è un modello derivato separato.
+Non è il JSON normalizzato dei turni e non cambia il raw schema 1.0 né il job
+schema 0.1. I moduli `temporal/` consumano esclusivamente coordinate display e
+riferimenti M2; non importano PyMuPDF e non consultano la rotazione originale.
+
+### Rilevamento dell'asse
+
+Per ogni row si raggruppano geometricamente token ASCII numerici di 1–2 cifre
+con valore 0–24, escludendo gli anchor strutturali della row. Non basta il
+valore numerico: servono almeno tre label allineate, una sequenza crescente di
+ore srotolata oltre mezzanotte, span sufficiente rispetto alla larghezza dei
+glifi e copertura vettoriale orizzontale vicina alla linea delle label.
+
+Ipotesi deterministiche sono generate da coppie vicine; ogni ipotesi deve
+spiegare almeno il 65% delle label della linea. Si ammettono gap fino a quattro
+ore per tick mancanti. Outlier numerici sono esclusi conservando i riferimenti.
+Solo dopo la verifica del reticolo orario si calcola il fit affine e se ne
+controlla il residual massimo. Due assi diversi ugualmente supportati danno
+AMBIGUOUS. Nessuna regola dipende da pagina, servizio o nome del documento.
+
+La ricerca è locale e limitata a 128 parole per linea e quattro vicini per
+coppia. Il costo delle ipotesi è O(R · K² · P) per pagina, con K limitato e
+P=4; non si confrontano token o segmenti di pagine diverse. Il matching delle
+label usa un indice x locale alla row. Il budget cooperativo è controllato
+tra row, ipotesi e segmenti; restano i limiti nativi e di memoria M2 già descritti.
+
+### Mapping e mezzanotte
+
+`absolute_minutes = minutes_per_point * display_x + intercept_minutes`.
+L'origine di calendario è fittizia: giorno zero è la mezzanotte precedente
+la prima ora osservata dell'asse. Il primo `24` equivale a 00 sul giorno zero;
+nei successivi anchor il passaggio 23 → 24/0 → 1 produce valori crescenti,
+per esempio 1380 → 1440 → 1500. Non si applica modulo 24 ai minuti interni.
+`origin_x` e `origin_absolute_minutes` identificano il primo anchor; gli endpoint
+espongono anche `minutes_from_axis_origin`. `TimeMapping.x_at()` implementa
+l'inversa. Nessuna data reale viene dedotta.
+
+HH:MM è una visualizzazione arrotondata al minuto più vicino; il valore
+continuo resta conservato. `rounding_residual_minutes` rende esplicita la
+perdita di precisione. `day_offset` accompagna la visualizzazione arrotondata;
+`crosses_midnight` usa invece i minuti geometrici non arrotondati. L'header
+start/end del documento non corregge mai mapping o segmenti.
+
+### Segmenti ed endpoint
+
+Si considerano solo primitive `l` con due punti, prevalentemente orizzontali,
+contenute nella row e nell'estensione misurata dell'asse. La soglia minima di
+lunghezza equivale a un minuto secondo il mapping. Baseline dell'asse, bordi
+verticali, frammenti insignificanti e primitive fuori regione sono esclusi.
+Le curve non sono convertite automaticamente in segmenti temporali.
+
+Ogni candidato conserva riferimento drawing/item, estremi originali del path
+nello spazio display, estremi normalizzati sinistra/destra, stili raw e motivi
+di rilevamento. Spessore e dash pattern non assegnano tipi operativi.
+Gli endpoint derivano da x; nessuna label sostituisce il tempo geometrico.
+
+Le label numeriche 0–59 vicine sono evidenze locali: si controllano distanza
+orizzontale dagli edge del bbox e distanza verticale dall'endpoint. Sono
+escluse le label dell'asse e gli anchor della row. Tutte le evidenze conservano
+word index, bbox, distanze e residual rispetto al tempo geometrico. Una label
+è compatibile solo se il residual, sommato al massimo residual dell'asse,
+è strettamente inferiore a mezzo minuto. Più label compatibili rimangono ambigue.
+
+| Stato endpoint | Significato |
+| --- | --- |
+| EXACT | Unica label numerica geometricamente vicina e temporalmente compatibile; non significa errore fisico nullo |
+| DERIVED | Mapping valido, senza evidenza numerica vicina; tempo interamente geometrico |
+| AMBIGUOUS | Label in conflitto o più evidenze compatibili; il tempo geometrico rimane disponibile e non viene corretto |
+| INVALID | Endpoint fuori dall'estensione ammessa o struttura non valida |
+
+Una row senza asse determinabile è AMBIGUOUS e non riceve segmenti inventati.
+Una row con asse valido può essere AMBIGUOUS per i suoi endpoint. Gli anchor
+orari espongono label raw, candidato numerico, punto display, minuti srotolati,
+word index e residual. I risultati referenziano generazione raw, SHA-256 del
+PDF, pagina, row, anchor della row e primitive. Non contengono copie delle
+words/drawings complete o percorsi locali.
+
+La validazione strutturale della row controlla tutti e quattro i bordi:
+`0 <= left < right <= page.width`, `0 <= top < bottom <= page.height`.
+Un bbox malformato produce INVALID senza correggere il raw. I riferimenti di
+supporto dell'asse e le motivazioni correlate sono ordinati per drawing/item;
+gli ordini geometrici di anchor, endpoint e path restano distinti.
+
+### Tolleranze e limiti
+
+Le tolleranze sono centralizzate in `temporal/tolerances.py` e registrate nel
+risultato. Allineamento delle label: `max(0.6 pt, 35% altezza del glifo)`;
+residual massimo dell'asse 0.35 minuti; copertura vettoriale minima 40% dello
+span. Questi vincoli verificano allineamento, spaziatura e supporto distinti.
+Le soglie geometriche dei segmenti sono 0.5 pt o pendenza massima 3%.
+Il matching nearby usa 25% del passo orario in x e 30% dell'altezza row in y.
+La compatibilità temporale è separata dalle distanze geometriche. I probe
+locali mostrano label orarie equispaziate e residual molto inferiori al limite;
+i test sintetici verificano rumore, tick mancanti/spuri e conflitti. Non viene
+applicata alcuna eccezione per accomodare gli outlier.
+
+### Inspector e persistenza
+
+L'inspector aggiunge toggle indipendenti per asse, segmenti e label degli
+endpoint, filtro per row e click su anchor/segmenti per provenance e dettagli.
+I colori distinguono stati deterministici, non attività. I dettagli sono
+serializzati con `tojson` e mostrati con `textContent`, come il raw M2.
+
+L'analisi e la cache sono **on-demand per pagina**, senza cambiare il ciclo
+upload M2 e senza analizzare tutte le pagine per aprirne una. Il percorso è:
+
+```text
+data/jobs/<uuid>/temporal/<raw_generation>/<algorithm_and_tolerances_hash>/<page_index>.json
+```
+
+Il digest comprende versione dell'algoritmo e tolleranze. Futuri cambi logici
+devono aggiornare la versione per invalidare cache precedenti. Scrittura con
+temporaneo esclusivo e replace atomico; nessuna modifica a `raw.json`, copies
+M2 o stato del job. Generazioni diverse non condividono cache. UUID/indici e
+symlink sono controllati anche sul nuovo percorso. Cache corrotta o mismatch
+produce errore controllato 503 nell'endpoint JSON; l'HTML conserva l'inspector
+M2 mostrando che M3A non è disponibile. Il JSON usa Content-Type dedicato,
+`no-store` e `nosniff`. I job incompleti e le pagine non diagramma non sono
+analizzati. Non esistono endpoint con path forniti dal browser.
+
+Prima di utilizzare una cache si verifica anche la corrispondenza 1:1 delle
+righe con il RawPage caricato: indici, bbox e anchor sorgenti devono coincidere.
+Ogni word/drawing/item referenziato, incluse le motivazioni, deve esistere e
+appartenere alla row sorgente. Label, punti e stili copiati devono corrispondere
+agli oggetti raw. Gli invarianti annidati verificano asse/mapping/residual,
+endpoint/path, label selezionata fra le candidate, stati e rollover, senza
+rifare la ricerca geometrica o introdurre regole ferroviarie. Le incoerenze
+producono lo stesso errore storage controllato. La verifica è locale: usa set
+per l'appartenenza, ricerca binaria degli anchor e ordinamento per la mediana
+del supporto. Non confronta ogni riferimento con l'intera pagina e non duplica
+il raw.
+
+Il campo additivo `page_type` riporta la classificazione M2. Le vecchie cache
+0.1, persistite esclusivamente per DUTY_DIAGRAM, restano leggibili anche senza
+questo campo e con support refs non canonicalizzati, senza riscrittura o
+ricalcolo. Schema e versione dell'algoritmo restano invariati perché mapping,
+tolleranze e criteri di rilevamento non cambiano.
+
+Per analizzare tutte le pagine di un job M2 locale già presente:
+
+```sh
+python scripts/inspect_temporal.py --data-dir data --job-id UUID_DEL_JOB
+```
+
+Il comando usa le copie per pagina, senza rileggere o copiare il PDF, e stampa
+statistiche, residual e riferimenti agli outlier. È opzionale e indipendente
+dalla suite CI. Output e cache devono restare nelle directory ignorate.
+Le misure locali M2/M3A vengono mantenute separate nei probe QA riservati.
+
+`duty_pages_analyzed` conta le pagine DUTY_DIAGRAM effettivamente analizzate,
+anche senza row; `duty_pages_without_rows` evidenzia queste ultime. `duty_pages`
+rimane un alias compatibile del primo contatore. Le pagine di altre classi
+non vengono conteggiate come diagrammi per la sola assenza di righe.
+
+Limiti deliberati: inferenza geometrica di layout supportati, precisione della
+geometria PDF, soli segmenti rettilinei prevalentemente orizzontali, label
+sovrapposte o spostate lasciate AMBIGUOUS, nessun collegamento segmento/treno,
+nessuna interpretazione degli accessori o estensione tramite header.
 
 ## PDF reali e Git
 

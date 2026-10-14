@@ -13,6 +13,7 @@ from starlette.responses import RedirectResponse, Response
 from railway_turno_decoder.errors import PDFInspectionError, UserError
 from railway_turno_decoder.jobs import JobService
 from railway_turno_decoder.pdf.render import render_page
+from railway_turno_decoder.temporal.storage import TemporalStore
 from railway_turno_decoder.web.views import home_response
 
 logger = logging.getLogger(__name__)
@@ -96,7 +97,20 @@ async def inspector_data(request: Request, job_id: str, page_index: int):
 
 @router.get("/jobs/{job_id}/pages/{page_index}")
 async def page_inspector(request: Request, job_id: str, page_index: int) -> Response:
-    _, job, page = await inspector_data(request, job_id, page_index)
+    service, job, page = await inspector_data(request, job_id, page_index)
+    temporal = None
+    temporal_error = None
+    if page.page_type == "DUTY_DIAGRAM":
+        try:
+            temporal = await run_in_threadpool(
+                TemporalStore(service.store).get_or_analyze,
+                job,
+                page,
+                max_analysis_seconds=service.settings.max_pdf_analysis_seconds,
+            )
+        except UserError as exc:
+            # Derived-cache failure must not prevent read-only M2 inspection.
+            temporal_error = exc.message
     return request.app.state.templates.TemplateResponse(
         request=request,
         name="inspector.html",
@@ -104,6 +118,9 @@ async def page_inspector(request: Request, job_id: str, page_index: int) -> Resp
             "job": job,
             "page": page,
             "words": [word.model_dump(mode="json") for word in page.words],
+            "temporal": temporal,
+            "temporal_data": temporal.model_dump(mode="json") if temporal else None,
+            "temporal_error": temporal_error,
         },
     )
 
@@ -127,5 +144,21 @@ async def page_image(
     return Response(
         png,
         media_type="image/png",
+        headers={"Cache-Control": "no-store", "X-Content-Type-Options": "nosniff"},
+    )
+
+
+@router.get("/jobs/{job_id}/pages/{page_index}/temporal.json")
+async def temporal_page(request: Request, job_id: str, page_index: int) -> Response:
+    service, job, page = await inspector_data(request, job_id, page_index)
+    result = await run_in_threadpool(
+        TemporalStore(service.store).get_or_analyze,
+        job,
+        page,
+        max_analysis_seconds=service.settings.max_pdf_analysis_seconds,
+    )
+    return Response(
+        result.model_dump_json(),
+        media_type="application/json",
         headers={"Cache-Control": "no-store", "X-Content-Type-Options": "nosniff"},
     )
